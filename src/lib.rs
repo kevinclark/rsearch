@@ -56,6 +56,14 @@ impl<'a, T, I> Index<'a, T, I>
     where T: Fn(&'a str) -> I,
           I: Iterator<Item = &'a str>
 {
+    fn with_tokenizer(tokenizer: T) -> Self {
+        Index {
+            tokenizer: tokenizer,
+            docs: Vec::new(),
+            postings: HashMap::new()
+        }
+    }
+
     fn add(&mut self, doc: &'a Document) {
         let doc_id = self.docs.len();
         self.docs.push(doc);
@@ -77,6 +85,9 @@ mod tests {
     }
 
 
+    // Document tests
+
+
     #[test]
     fn from_mail_with_real_email() -> Result<(), DocumentError> {
         let d = Document::from_mail(email_path("1.eml"))?;
@@ -84,13 +95,13 @@ mod tests {
         Ok(())
     }
 
+
+    // Index tests
+
+
     #[test]
     fn add_to_index() -> Result<(), DocumentError> {
-        let mut idx = Index {
-            tokenizer: |s: &str| s.split_whitespace(),
-            docs: Vec::new(),
-            postings: HashMap::new()
-        };
+        let mut idx = Index::with_tokenizer(|s: &str| s.split_whitespace() );
 
         let d = Document::from_mail(email_path("1.eml"))?;
 
