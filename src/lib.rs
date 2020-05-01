@@ -68,7 +68,8 @@ impl<'a, T, I> Index<'a, T, I>
         let doc_id = self.docs.len();
         self.docs.push(doc);
         for term in (self.tokenizer)(&doc.content) {
-            (self.postings.entry(term.to_string()).or_insert(Vec::new())).push(doc_id);
+            (self.postings.entry(term.to_string()).or_insert(Vec::new()))
+                .push(doc_id);
         }
     }
 }
