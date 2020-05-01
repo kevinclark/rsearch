@@ -1,6 +1,10 @@
 use std::fs;
 use std::io;
+use std::vec::Vec;
 use std::path::PathBuf;
+use std::collections::HashMap;
+
+
 use mailparse;
 
 #[derive(Debug)]
@@ -35,7 +39,29 @@ impl Document {
     }
 }
 
+struct Index<'a, T>
+    where T: Fn(&str) -> Vec<&str>
+{
+    tokenizer: T,
+    // Append only
+    docs: Vec<&'a Document>,
+    // Should probably templatize this later to allow variable numbers
+    // but would mean that we need to increment our own counter rather
+    // than using the vector size.
+    postings: HashMap<String, Vec<usize>>
+}
 
+impl<'a, T> Index<'a, T>
+    where T: Fn(&str) -> Vec<&str>
+{
+    fn add(&mut self, doc: &'a Document) {
+        let doc_id = self.docs.len();
+        self.docs.push(doc);
+        for term in (self.tokenizer)(&doc.content) {
+            (self.postings.entry(term.to_string()).or_insert(Vec::new())).push(doc_id);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -54,6 +80,22 @@ mod tests {
     fn from_mail_with_real_email() -> Result<(), DocumentError> {
         let d = Document::from_mail(email_path("1.eml"))?;
         assert_eq!("Please let me know if you still need Curve Shift.\n\nThanks,\nHeather", d.content);
+        Ok(())
+    }
+
+    #[test]
+    fn add_to_index() -> Result<(), DocumentError> {
+        let mut idx = Index {
+            tokenizer: |s: &str| { s.split_whitespace().collect() },
+            docs: Vec::new(),
+            postings: HashMap::new()
+        };
+
+        let d = Document::from_mail(email_path("1.eml"))?;
+
+        idx.add(&d);
+
+        assert_eq!(Some(&vec![0]), idx.postings.get("Please"));
         Ok(())
     }
 }
