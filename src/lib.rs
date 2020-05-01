@@ -39,8 +39,9 @@ impl Document {
     }
 }
 
-struct Index<'a, T>
-    where T: Fn(&str) -> Vec<&str>
+struct Index<'a, T, I>
+    where T: Fn(&'a str) -> I,
+          I: Iterator<Item = &'a str>
 {
     tokenizer: T,
     // Append only
@@ -51,8 +52,9 @@ struct Index<'a, T>
     postings: HashMap<String, Vec<usize>>
 }
 
-impl<'a, T> Index<'a, T>
-    where T: Fn(&str) -> Vec<&str>
+impl<'a, T, I> Index<'a, T, I>
+    where T: Fn(&'a str) -> I,
+          I: Iterator<Item = &'a str>
 {
     fn add(&mut self, doc: &'a Document) {
         let doc_id = self.docs.len();
@@ -66,7 +68,6 @@ impl<'a, T> Index<'a, T>
 #[cfg(test)]
 mod tests {
     use std::env;
-
     use super::*;
 
     fn email_path(name: &str) -> PathBuf {
@@ -86,7 +87,7 @@ mod tests {
     #[test]
     fn add_to_index() -> Result<(), DocumentError> {
         let mut idx = Index {
-            tokenizer: |s: &str| { s.split_whitespace().collect() },
+            tokenizer: |s: &str| s.split_whitespace(),
             docs: Vec::new(),
             postings: HashMap::new()
         };
