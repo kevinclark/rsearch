@@ -39,22 +39,20 @@ impl Document {
     }
 }
 
-struct Index<'a, T, I>
-    where T: Fn(&'a str) -> I,
-          I: Iterator<Item = &'a str>
+struct Index<T>
+    where T: Fn(&str) -> Vec<&str>
 {
     tokenizer: T,
     // Append only
-    docs: Vec<&'a Document>,
+    docs: Vec<Document>,
     // Should probably templatize this later to allow variable numbers
     // but would mean that we need to increment our own counter rather
     // than using the vector size.
     postings: HashMap<String, Vec<usize>>
 }
 
-impl<'a, T, I> Index<'a, T, I>
-    where T: Fn(&'a str) -> I,
-          I: Iterator<Item = &'a str>
+impl<T> Index<T>
+    where T: Fn(&str) -> Vec<&str>
 {
     fn with_tokenizer(tokenizer: T) -> Self {
         Index {
@@ -64,13 +62,13 @@ impl<'a, T, I> Index<'a, T, I>
         }
     }
 
-    fn add(&mut self, doc: &'a Document) {
+    fn add(&mut self, doc: Document) {
         let doc_id = self.docs.len();
-        self.docs.push(doc);
         for term in (self.tokenizer)(&doc.content) {
             (self.postings.entry(term.to_string()).or_insert(Vec::new()))
                 .push(doc_id);
         }
+        self.docs.push(doc);
     }
 }
 
@@ -102,11 +100,11 @@ mod tests {
 
     #[test]
     fn add_to_index() -> Result<(), DocumentError> {
-        let mut idx = Index::with_tokenizer(|s: &str| s.split_whitespace() );
+        let mut idx = Index::with_tokenizer(|s: &str| s.split_whitespace().collect() );
 
         let d = Document::from_mail(email_path("1.eml"))?;
 
-        idx.add(&d);
+        idx.add(d);
 
         assert_eq!(Some(&vec![0]), idx.postings.get("Please"));
         Ok(())
