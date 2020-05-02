@@ -8,22 +8,24 @@ use std::collections::HashMap;
 use mailparse;
 
 #[derive(Debug)]
-enum DocumentError {
+enum Error {
     ReadError(io::Error),
     ParseError(mailparse::MailParseError)
 }
 
-impl From<io::Error> for DocumentError {
+impl From<io::Error> for Error {
     fn from(error: io::Error) -> Self {
-        DocumentError::ReadError(error)
+        Error::ReadError(error)
     }
 }
 
-impl From<mailparse::MailParseError> for DocumentError {
+impl From<mailparse::MailParseError> for Error {
     fn from(error: mailparse::MailParseError) -> Self {
-        DocumentError::ParseError(error)
+        Error::ParseError(error)
     }
 }
+
+type Result<T> = std::result::Result<T, Error>;
 
 struct Document {
     path: PathBuf, // PathBuf?
@@ -32,7 +34,7 @@ struct Document {
 
 impl Document {
     // TODO: We should apparently be using P: AsRef<Path> or something similar
-    fn from_mail(path: PathBuf) -> Result<Document, DocumentError> {
+    fn from_mail(path: PathBuf) -> Result<Document> {
         let content = fs::read(&path)?;
         let content = mailparse::parse_mail(&content)?.get_body()?.trim().to_string();
         Ok(Document { path, content })
@@ -88,7 +90,7 @@ mod tests {
 
 
     #[test]
-    fn from_mail_with_real_email() -> Result<(), DocumentError> {
+    fn from_mail_with_real_email() -> Result<()> {
         let d = Document::from_mail(email_path("1.eml"))?;
         assert_eq!("Please let me know if you still need Curve Shift.\n\nThanks,\nHeather", d.content);
         Ok(())
@@ -99,7 +101,7 @@ mod tests {
 
 
     #[test]
-    fn add_to_index() -> Result<(), DocumentError> {
+    fn add_to_index() -> Result<()> {
         let mut idx = Index::with_tokenizer(|s: &str| s.split_whitespace().collect() );
 
         let d = Document::from_mail(email_path("1.eml"))?;
