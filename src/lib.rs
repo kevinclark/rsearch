@@ -41,10 +41,8 @@ impl Document {
     }
 }
 
-struct Index<T>
-    where T: Fn(&str) -> Vec<&str>
+struct Index
 {
-    tokenizer: T,
     // Append only
     docs: Vec<Document>,
     // Should probably templatize this later to allow variable numbers
@@ -53,12 +51,10 @@ struct Index<T>
     postings: HashMap<String, Vec<usize>>
 }
 
-impl<T> Index<T>
-    where T: Fn(&str) -> Vec<&str>
+impl Index
 {
-    fn with_tokenizer(tokenizer: T) -> Self {
+    fn new() -> Self {
         Index {
-            tokenizer: tokenizer,
             docs: Vec::new(),
             postings: HashMap::new()
         }
@@ -66,7 +62,7 @@ impl<T> Index<T>
 
     fn add(&mut self, doc: Document) {
         let doc_id = self.docs.len();
-        for term in (self.tokenizer)(&doc.content) {
+        for term in doc.content.split_whitespace() {
             (self.postings.entry(term.to_string()).or_insert(Vec::new()))
                 .push(doc_id);
         }
@@ -102,7 +98,7 @@ mod tests {
 
     #[test]
     fn add_to_index() -> Result<()> {
-        let mut idx = Index::with_tokenizer(|s: &str| s.split_whitespace().collect() );
+        let mut idx = Index::new();
 
         let d = Document::from_mail(email_path("1.eml"))?;
 
