@@ -3,6 +3,7 @@ use std::io;
 use std::vec::Vec;
 use std::path::PathBuf;
 use std::collections::HashMap;
+use itertools::Itertools;
 
 
 use mailparse;
@@ -27,8 +28,8 @@ impl From<mailparse::MailParseError> for Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
+#[derive(PartialEq, Debug, Clone)]
 struct Document {
-    path: PathBuf, // PathBuf?
     content: String
 }
 
@@ -37,15 +38,18 @@ impl Document {
     fn from_mail(path: PathBuf) -> Result<Document> {
         let content = fs::read(&path)?;
         let content = mailparse::parse_mail(&content)?.get_body()?.trim().to_string();
-        Ok(Document { path, content })
+
+        Ok(Document { content })
     }
+
 }
 
 struct Index
 {
     // Append only
     docs: Vec<Document>,
-    // Should probably templatize this later to allow variable numbers
+    // Terms in postings list are normalized (lowercased for now, more later)
+    // TODO: Should probably templatize this later to allow variable numbers
     // but would mean that we need to increment our own counter rather
     // than using the vector size.
     postings: HashMap<String, Vec<usize>>
@@ -62,12 +66,25 @@ impl Index
 
     fn add(&mut self, doc: Document) {
         let doc_id = self.docs.len();
-        for term in doc.content.split_whitespace() {
+        for term in doc.content.to_lowercase().split_whitespace() {
             (self.postings.entry(term.to_string()).or_insert(Vec::new()))
                 .push(doc_id);
         }
         self.docs.push(doc);
     }
+
+    fn search<'a>(&'a self, query: &str) -> Vec<&'a Document> {
+        query.split_whitespace()
+            .unique() // Only non-duplicate tokens
+            .map(|tok| self.postings.get(tok))
+            .filter(|option| option.is_some())
+            // Transform into just unique doc ids
+            .flat_map(|option| option.unwrap())
+            .unique()
+            // Collect the actual documents
+            .map(|doc_id| &self.docs[*doc_id])
+            .collect()
+     }
 }
 
 #[cfg(test)]
@@ -104,7 +121,21 @@ mod tests {
 
         idx.add(d);
 
-        assert_eq!(Some(&vec![0]), idx.postings.get("Please"));
+        assert_eq!(Some(&vec![0]), idx.postings.get("please"));
+        Ok(())
+    }
+
+    #[test]
+    fn search_index() -> Result<()> {
+        let mut idx = Index::new();
+        let dogs = Document { content: String::from("dogs and cats are super cool") };
+        let cats_better = Document { content: String::from("but cats are better") };
+
+        idx.add(dogs.clone());
+        idx.add(cats_better.clone());
+        idx.add(Document { content: String::from("no") });
+
+        assert_eq!(vec![&dogs, &cats_better], idx.search("cats"));
         Ok(())
     }
 }

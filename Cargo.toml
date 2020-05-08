@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 mailparse = "0.12"
+itertools = "0.9.0"
