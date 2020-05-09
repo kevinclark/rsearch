@@ -130,15 +130,13 @@ impl Index
 
 
         // List of offsets into content, then content
-        if !self.docs.is_empty() {
-            writer.write(&(self.docs.len() as u32).to_be_bytes());
-            for offset in &offsets {
-                writer.write(&offset.to_be_bytes());
-            }
+        writer.write(&(self.docs.len() as u32).to_be_bytes());
+        for offset in &offsets {
+            writer.write(&offset.to_be_bytes());
+        }
 
-            for doc in &self.docs {
-                writer.write(doc.content.as_bytes());
-            }
+        for doc in &self.docs {
+            writer.write(doc.content.as_bytes());
         }
 
         writer.flush();
@@ -205,7 +203,8 @@ mod tests {
 
         Index::new().write(&mut buf);
 
-        assert_eq!(&[0, 0, 0, 0], &buf.get_ref()[..]);
+        // No postings (4 bytes) no docs (4 bytes)
+        assert_eq!(&[0; 8], &buf.get_ref()[..]);
     }
 
     #[test]
