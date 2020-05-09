@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::prelude::*;
 use std::io;
 use std::vec::Vec;
 use std::path::PathBuf;
@@ -84,7 +85,46 @@ impl Index
             // Collect the actual documents
             .map(|doc_id| &self.docs[*doc_id])
             .collect()
-     }
+    }
+
+    fn write<W>(&self, writer: W) -> Result<()>
+        where W : io::Write
+    {
+        let mut writer = io::BufWriter::new(writer);
+        // Write postings
+        //
+        // NOTE: This explicitly casts usize to u32, which is not safe.
+        //       We're just doing it here and will do it on read for now.
+        //       This isn't correct, but for our purposes is proably good enough.
+        //       If we've got more than 2**32 docs to index at one point we should
+        //       have implemented index partitioning a while ago.
+        //
+        // Format:
+        //
+        // POSTINGS_SIZE:u32 [TERM_SIZE:u8 TERM NUM_DOC_IDS: u32 [u32, u32]], ...
+        writer.write(&(self.postings.keys().len() as u32).to_be_bytes());
+
+        for (term, doc_ids) in &self.postings {
+            // Term length, then term
+            let term_bytes = term.as_bytes();
+            writer.write(&(term_bytes.len() as u8).to_be_bytes());
+            writer.write(&term_bytes[..]);
+
+            // Number of docs, then the docs
+            writer.write(&(doc_ids.len() as u32).to_be_bytes());
+            for doc_id in doc_ids {
+                writer.write(&(*doc_id as u32).to_be_bytes());
+            }
+        }
+
+        // Write documents
+        // Initially just a linked list. Should probably skip list later.
+        // [DOC_SIZE CONTENT], ...
+
+        writer.flush();
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -137,5 +177,33 @@ mod tests {
 
         assert_eq!(vec![&dogs, &cats_better], idx.search("cats"));
         Ok(())
+    }
+
+    #[test]
+    fn write_with_no_documents() {
+        let mut buf = io::Cursor::new(vec![0; 1]);
+
+        Index::new().write(&mut buf);
+
+        assert_eq!(&[0, 0, 0, 0], &buf.get_ref()[..]);
+    }
+
+    #[test]
+    fn write_with_one_doc_and_one_term() {
+        let foo = Document { content: String::from("foo") };
+        // We create an index with a postings list but no docs
+        // for test purposes only. This shouldn't really exist in practice.
+        let mut index = Index::new();
+        index.add(foo);
+
+        let mut buf = io::Cursor::new(vec![]);
+        index.write(&mut buf);
+
+        assert_eq!(&[0, 0, 0, 1,        // One posting
+                     3,                 // Three letters
+                     b'f', b'o', b'o',
+                     0, 0, 0, 1,        // One doc_id
+                     0, 0, 0, 0],       // Doc 2
+                   &buf.get_ref()[..]);
     }
 }
