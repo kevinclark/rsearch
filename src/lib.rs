@@ -4,6 +4,7 @@ use std::io;
 use std::vec::Vec;
 use std::path::PathBuf;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use itertools::Itertools;
 
 
@@ -45,6 +46,9 @@ impl Document {
 
 }
 
+type PostingsList = HashMap<String, Vec<usize>>;
+
+#[derive(PartialEq, Debug)]
 struct Index
 {
     // Append only
@@ -53,7 +57,7 @@ struct Index
     // TODO: Should probably templatize this later to allow variable numbers
     // but would mean that we need to increment our own counter rather
     // than using the vector size.
-    postings: HashMap<String, Vec<usize>>
+    postings: PostingsList
 }
 
 impl Index
@@ -119,29 +123,75 @@ impl Index
 
         // Write documents
         //
-        // First, convert to bytes and get offsets
-        let bytes = self.docs.iter().map(|doc| doc.content.as_bytes());
-        let mut offsets: Vec<u32> = vec![];
-        let mut sum: u32 = 0;
-        for (_, val) in bytes.enumerate() {
-            offsets.push(sum);
-            sum += val.len() as u32;
-        }
-
-
-        // List of offsets into content, then content
+        // Number of documents, then doc length and content pairs
         writer.write(&(self.docs.len() as u32).to_be_bytes());
-        for offset in &offsets {
-            writer.write(&offset.to_be_bytes());
-        }
-
         for doc in &self.docs {
+            writer.write(&(doc.content.len() as u32).to_be_bytes());
             writer.write(doc.content.as_bytes());
         }
 
         writer.flush();
 
         Ok(())
+    }
+
+    fn read<R>(reader: R) -> Self
+        where R: io::Read
+    {
+        let reader = io::BufReader::new(reader);
+
+        let mut buf = [0 as u8; 256]; // Biggest thing we put in here is term, which is sized by a u8
+
+        // First, postings size
+        let mut reader = reader.take(4);
+        reader.read_exact(&mut buf);
+
+        let num_terms = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+
+        let mut postings: PostingsList = HashMap::with_capacity(num_terms as usize);
+        for _ in 0..num_terms {
+            // Read the size of the term, then the term itself
+            reader.set_limit(1);
+            reader.read_exact(&mut buf);
+            let term_size = u8::from_be_bytes([buf[0]]) as usize;
+
+            reader.set_limit(term_size as u64);
+            reader.read_exact(&mut buf);
+            let term = String::from_utf8(buf[0..term_size].to_vec()).unwrap();
+
+            // Then the number of doc ids and the doc ids themselves
+            reader.set_limit(4);
+            reader.read_exact(&mut buf);
+            let num_doc_ids = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+
+            let mut doc_ids: Vec<usize> = Vec::with_capacity(num_doc_ids as usize);
+
+            for _ in 0..num_doc_ids {
+                reader.set_limit(4);
+                reader.read_exact(&mut buf);
+                doc_ids.push(u32::from_be_bytes(buf[0..4].try_into().unwrap()) as usize);
+            }
+
+            postings.insert(term, doc_ids);
+        }
+
+        reader.set_limit(4);
+        reader.read_exact(&mut buf);
+        let num_docs = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+
+        let docs = (0..num_docs).map(|_| {
+            reader.set_limit(4);
+            reader.read_exact(&mut buf);
+            let content_size = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+
+            let mut content = String::new();
+            reader.set_limit(content_size as u64);
+            reader.read_to_string(&mut content);
+
+            Document { content }
+        }).collect();
+
+        Index { postings, docs }
     }
 }
 
@@ -224,9 +274,34 @@ mod tests {
                      0, 0, 0, 1,        // One doc_id
                      0, 0, 0, 0,        // Doc 0
                      0, 0, 0, 1,        // One doc
-                     0, 0, 0, 0,        // Offset into first doc is 0
+                     0, 0, 0, 3,        // Length of first doc
                      b'f', b'o', b'o'   // The doc content
                     ],
                    &buf.get_ref()[..]);
+    }
+
+    #[test]
+    fn read_with_one_doc_and_term() -> Result<()> {
+        let buf =
+            // One term in the postings list: foo
+            [0, 0, 0, 1,
+                3, b'f', b'o', b'o',
+            // To one doc, doc_id 0
+                0, 0, 0, 1, 0, 0, 0, 0,
+            // One stored doc, of length 3
+             0, 0, 0, 1,
+            // Doc length 3
+                0, 0, 0, 3,
+            // And the doc content
+                b'f', b'o', b'o'];
+        let index = Index::read(io::Cursor::new(buf));
+
+        let foo = Document { content: String::from("foo") };
+        let mut expected_index = Index::new();
+        expected_index.add(foo);
+
+        assert_eq!(expected_index, index);
+
+        Ok(())
     }
 }
