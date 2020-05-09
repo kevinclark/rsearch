@@ -118,8 +118,28 @@ impl Index
         }
 
         // Write documents
-        // Initially just a linked list. Should probably skip list later.
-        // [DOC_SIZE CONTENT], ...
+        //
+        // First, convert to bytes and get offsets
+        let bytes = self.docs.iter().map(|doc| doc.content.as_bytes());
+        let mut offsets: Vec<u32> = vec![];
+        let mut sum: u32 = 0;
+        for (_, val) in bytes.enumerate() {
+            offsets.push(sum);
+            sum += val.len() as u32;
+        }
+
+
+        // List of offsets into content, then content
+        if !self.docs.is_empty() {
+            writer.write(&(self.docs.len() as u32).to_be_bytes());
+            for offset in &offsets {
+                writer.write(&offset.to_be_bytes());
+            }
+
+            for doc in &self.docs {
+                writer.write(doc.content.as_bytes());
+            }
+        }
 
         writer.flush();
 
@@ -203,7 +223,11 @@ mod tests {
                      3,                 // Three letters
                      b'f', b'o', b'o',
                      0, 0, 0, 1,        // One doc_id
-                     0, 0, 0, 0],       // Doc 2
+                     0, 0, 0, 0,        // Doc 0
+                     0, 0, 0, 1,        // One doc
+                     0, 0, 0, 0,        // Offset into first doc is 0
+                     b'f', b'o', b'o'   // The doc content
+                    ],
                    &buf.get_ref()[..]);
     }
 }
