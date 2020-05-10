@@ -3,7 +3,10 @@ use std::io::prelude::*;
 use std::io;
 use std::vec::Vec;
 use std::convert::TryInto;
+
 use itertools::Itertools;
+use unicode_segmentation::UnicodeSegmentation;
+
 
 
 #[derive(PartialEq, Debug, Clone)]
@@ -39,7 +42,7 @@ impl Index
 
     pub fn add(&mut self, doc: Document) {
         let doc_id = self.docs.len();
-        for term in doc.content.to_lowercase().split_whitespace() {
+        for term in doc.content.to_lowercase().unicode_words() {
             (self.postings.entry(term.to_string()).or_insert(Vec::new()))
                 .push(doc_id);
         }
@@ -47,7 +50,7 @@ impl Index
     }
 
     pub fn search<'a>(&'a self, query: &str) -> Vec<&'a Document> {
-        query.split_whitespace()
+        query.to_lowercase().unicode_words()
             .unique() // Only non-duplicate tokens
             .map(|tok| self.postings.get(tok))
             .filter(|option| option.is_some())
