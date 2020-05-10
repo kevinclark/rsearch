@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, Instant};
+
 use rsearch::{Document, Index};
 
 use clap::{crate_authors, crate_description, crate_name, crate_version, App, SubCommand, Arg};
@@ -40,6 +42,8 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
         let mut index = Index::new();
 
+        let start = Instant::now();
+
         let walker = WalkDir::new(input_dir).into_iter();
         for entry in walker.filter_entry(|e| !is_hidden(e)) {
             let entry = entry.unwrap();
@@ -47,14 +51,18 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 match mail_content(entry.path()) {
                     Ok(content) => {
                         index.add(Document { content });
-                        print!(".");
+                        // print!(".");
                     }
-                    Err(_) => print!("-")
+                    Err(_) => {} // print!("-")
                 }
             }
         }
 
+        println!("Done reading in {:?}", start.elapsed());
+
         index.write(output_file);
+
+        println!("Done writing in {:?}", start.elapsed());
     }
 
     Ok(())
