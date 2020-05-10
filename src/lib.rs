@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::prelude::*;
 use std::io;
 use std::vec::Vec;
@@ -19,7 +18,7 @@ use std::collections::HashMap;
 type PostingsList = HashMap<String, Vec<usize>>;
 
 
-#[derive(PartialEq, Debug)]
+#[derive(Default, PartialEq, Debug)]
 pub struct Index
 {
     // Append only
@@ -33,13 +32,6 @@ pub struct Index
 
 impl Index
 {
-    pub fn new() -> Self {
-        Index {
-            docs: Vec::new(),
-            postings: PostingsList::default()
-        }
-    }
-
     pub fn add(&mut self, doc: Document) {
         let doc_id = self.docs.len();
         for term in doc.content.to_lowercase().unicode_words() {
@@ -173,7 +165,7 @@ mod tests {
 
     #[test]
     fn add_to_index() {
-        let mut idx = Index::new();
+        let mut idx: Index = Default::default();
 
         idx.add(Document { content: "hello".to_string() });
         idx.add(Document { content: "world".to_string() });
@@ -184,7 +176,7 @@ mod tests {
 
     #[test]
     fn search_index() {
-        let mut idx = Index::new();
+        let mut idx: Index = Default::default();
         let dogs = Document { content: String::from("dogs and cats are super cool") };
         let cats_better = Document { content: String::from("but cats are better") };
 
@@ -199,7 +191,8 @@ mod tests {
     fn write_with_no_documents() {
         let mut buf = io::Cursor::new(vec![0; 1]);
 
-        Index::new().write(&mut buf);
+        let mut idx: Index = Default::default();
+        idx.write(&mut buf);
 
         // No postings (4 bytes) no docs (4 bytes)
         assert_eq!(&[0; 8], &buf.get_ref()[..]);
@@ -210,7 +203,7 @@ mod tests {
         let foo = Document { content: String::from("foo") };
         // We create an index with a postings list but no docs
         // for test purposes only. This shouldn't really exist in practice.
-        let mut index = Index::new();
+        let mut index: Index = Default::default();
         index.add(foo);
 
         let mut buf = io::Cursor::new(vec![]);
@@ -245,7 +238,7 @@ mod tests {
         let index = Index::read(io::Cursor::new(buf));
 
         let foo = Document { content: String::from("foo") };
-        let mut expected_index = Index::new();
+        let mut expected_index: Index = Default::default();
         expected_index.add(foo);
 
         assert_eq!(expected_index, index);
