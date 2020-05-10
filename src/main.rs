@@ -54,11 +54,11 @@ fn main() -> std::result::Result<(), std::io::Error> {
             }
         }
 
-        println!("Done reading in {:?}", start.elapsed());
+        println!("Done reading at {:?}", start.elapsed());
 
         index.write(output_file);
 
-        println!("Done writing in {:?}", start.elapsed());
+        println!("Done writing at {:?}", start.elapsed());
     }
 
     Ok(())
