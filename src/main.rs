@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use rsearch::{Document, Index};
 
@@ -11,7 +11,7 @@ use walkdir::{DirEntry, WalkDir};
 fn is_hidden(entry: &DirEntry) -> bool {
     entry.file_name()
          .to_str()
-         .map(|s| s.starts_with("."))
+         .map(|s| s.starts_with('.'))
          .unwrap_or(false)
 }
 
@@ -48,12 +48,8 @@ fn main() -> std::result::Result<(), std::io::Error> {
         for entry in walker.filter_entry(|e| !is_hidden(e)) {
             let entry = entry.unwrap();
             if !entry.file_type().is_dir() {
-                match mail_content(entry.path()) {
-                    Ok(content) => {
-                        index.add(Document { content });
-                        // print!(".");
-                    }
-                    Err(_) => {} // print!("-")
+                if let Ok(content) = mail_content(entry.path()) {
+                    index.add(Document { content });
                 }
             }
         }

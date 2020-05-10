@@ -35,7 +35,7 @@ impl Index
     pub fn add(&mut self, doc: Document) {
         let doc_id = self.docs.len();
         for term in doc.content.to_lowercase().unicode_words() {
-            (self.postings.entry(term.to_string()).or_insert(Vec::new()))
+            (self.postings.entry(term.to_string()).or_insert_with(Vec::new))
                 .push(doc_id);
         }
         self.docs.push(doc);
