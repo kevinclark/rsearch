@@ -2,7 +2,6 @@ use std::fs;
 use std::io::prelude::*;
 use std::io;
 use std::vec::Vec;
-use std::collections::HashMap;
 use std::convert::TryInto;
 use itertools::Itertools;
 
@@ -12,7 +11,10 @@ pub struct Document {
     pub content: String
 }
 
+
+use std::collections::HashMap;
 type PostingsList = HashMap<String, Vec<usize>>;
+
 
 #[derive(PartialEq, Debug)]
 pub struct Index
@@ -31,7 +33,7 @@ impl Index
     pub fn new() -> Self {
         Index {
             docs: Vec::new(),
-            postings: HashMap::new()
+            postings: PostingsList::default()
         }
     }
 
@@ -112,7 +114,7 @@ impl Index
 
         let num_terms = u32::from_be_bytes(buf[0..4].try_into().unwrap());
 
-        let mut postings: PostingsList = HashMap::with_capacity(num_terms as usize);
+        let mut postings: PostingsList = PostingsList::with_capacity_and_hasher(num_terms as usize, Default::default());
         for _ in 0..num_terms {
             // Read the size of the term, then the term itself
             reader.set_limit(1);
