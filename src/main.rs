@@ -36,8 +36,8 @@ fn main() -> std::result::Result<(), std::io::Error> {
     .get_matches();
 
     if let Some(matches) = matches.subcommand_matches("create") {
-        let input_dir = matches.value_of("input_dir").unwrap();
-        let output_file = matches.value_of("output_file").unwrap();
+        let input_dir = matches.value_of("input_dir").expect("input_dir required");
+        let output_file = matches.value_of("output_file").expect("output_file required");
         let output_file = fs::File::create(output_file).expect("Unable to open output file");
 
         let mut index: Index = Default::default();
@@ -56,7 +56,7 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
         println!("Done reading at {:?}", start.elapsed());
 
-        index.write(output_file);
+        index.write(output_file)?;
 
         println!("Done writing at {:?}", start.elapsed());
     }

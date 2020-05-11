@@ -1,12 +1,40 @@
-use std::io::prelude::*;
-use std::io;
-use std::vec::Vec;
-use std::convert::TryInto;
+use std::{
+    io, io::prelude::*,
+    vec::Vec
+};
 
 use itertools::Itertools;
 use unicode_segmentation::UnicodeSegmentation;
+use snafu::{Snafu, ResultExt, Backtrace};
 
 
+#[derive(Debug, Snafu)]
+pub enum IndexReadError {
+    #[snafu_display("{}", "source")]
+    IO { source: io::Error, backtrace: Backtrace },
+    #[snafu_display("{}", "source")]
+    UTF8Read { source: std::string::FromUtf8Error, backtrace: Backtrace}
+}
+
+fn read_u32<R>(reader: &mut io::Take<R>) -> Result<u32, IndexReadError>
+    where R: io::BufRead
+{
+    let mut buf = [0 as u8; 4];
+    reader.set_limit(4);
+    reader.read_exact(&mut buf).context(IO {})?;
+
+    Ok(u32::from_be_bytes(buf))
+}
+
+fn read_u8<R>(reader: &mut io::Take<R>) -> Result<u8, IndexReadError>
+    where R: io::BufRead
+{
+    let mut buf = [0 as u8];
+    reader.set_limit(1);
+    reader.read_exact(&mut buf).context(IO {})?;
+
+    Ok(buf[0])
+}
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct Document {
@@ -54,7 +82,7 @@ impl Index
             .collect()
     }
 
-    pub fn write<W>(&self, writer: W)
+    pub fn write<W>(&self, writer: W) -> Result<(), io::Error>
         where W : io::Write
     {
         let mut writer = io::BufWriter::new(writer);
@@ -69,90 +97,79 @@ impl Index
         // Format:
         //
         // POSTINGS_SIZE:u32 [TERM_SIZE:u8 TERM NUM_DOC_IDS: u32 [u32, u32]], ...
-        writer.write(&(self.postings.keys().len() as u32).to_be_bytes());
+        writer.write_all(&(self.postings.keys().len() as u32).to_be_bytes())?;
 
         for (term, doc_ids) in &self.postings {
             // Term length, then term
             let term_bytes = term.as_bytes();
-            writer.write(&(term_bytes.len() as u8).to_be_bytes());
-            writer.write(&term_bytes[..]);
+            writer.write_all(&(term_bytes.len() as u8).to_be_bytes())?;
+            writer.write_all(&term_bytes[..])?;
 
             // Number of docs, then the docs
-            writer.write(&(doc_ids.len() as u32).to_be_bytes());
+            writer.write_all(&(doc_ids.len() as u32).to_be_bytes())?;
             for doc_id in doc_ids {
-                writer.write(&(*doc_id as u32).to_be_bytes());
+                writer.write_all(&(*doc_id as u32).to_be_bytes())?;
             }
         }
 
         // Write documents
         //
         // Number of documents, then doc length and content pairs
-        writer.write(&(self.docs.len() as u32).to_be_bytes());
+        writer.write_all(&(self.docs.len() as u32).to_be_bytes())?;
         for doc in &self.docs {
-            writer.write(&(doc.content.len() as u32).to_be_bytes());
-            writer.write(doc.content.as_bytes());
+            writer.write_all(&(doc.content.len() as u32).to_be_bytes())?;
+            writer.write_all(doc.content.as_bytes())?;
         }
 
-        writer.flush();
+        writer.flush()?;
+
+        Ok(())
     }
 
-    pub fn read<R>(reader: R) -> Self
+    pub fn read<R>(reader: R) -> Result<Self, IndexReadError>
         where R: io::Read
     {
         let reader = io::BufReader::new(reader);
-
-        let mut buf = [0 as u8; 256]; // Biggest thing we put in here is term, which is sized by a u8
+        let mut reader = reader.take(4);
 
         // First, postings size
-        let mut reader = reader.take(4);
-        reader.read_exact(&mut buf);
-
-        let num_terms = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+        let num_terms = read_u32(&mut reader)?;
 
         let mut postings: PostingsList = PostingsList::with_capacity_and_hasher(num_terms as usize, Default::default());
         for _ in 0..num_terms {
             // Read the size of the term, then the term itself
-            reader.set_limit(1);
-            reader.read_exact(&mut buf);
-            let term_size = u8::from_be_bytes([buf[0]]) as usize;
+            let term_size = read_u8(&mut reader)? as usize;
 
             reader.set_limit(term_size as u64);
-            reader.read_exact(&mut buf);
-            let term = String::from_utf8(buf[0..term_size].to_vec()).unwrap();
+            let mut term = String::new();
+            reader.read_to_string(&mut term).context(IO {})?;
 
             // Then the number of doc ids and the doc ids themselves
-            reader.set_limit(4);
-            reader.read_exact(&mut buf);
-            let num_doc_ids = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+            let num_doc_ids = read_u32(&mut reader)?;
 
             let mut doc_ids: Vec<usize> = Vec::with_capacity(num_doc_ids as usize);
 
             for _ in 0..num_doc_ids {
-                reader.set_limit(4);
-                reader.read_exact(&mut buf);
-                doc_ids.push(u32::from_be_bytes(buf[0..4].try_into().unwrap()) as usize);
+                doc_ids.push(read_u32(&mut reader)? as usize);
             }
 
             postings.insert(term, doc_ids);
         }
 
-        reader.set_limit(4);
-        reader.read_exact(&mut buf);
-        let num_docs = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+        let num_docs = read_u32(&mut reader)?;
 
-        let docs = (0..num_docs).map(|_| {
-            reader.set_limit(4);
-            reader.read_exact(&mut buf);
-            let content_size = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+        let mut docs: Vec<Document> = Vec::with_capacity(num_docs as usize);
+        for _ in 0..num_docs {
+            let content_size = read_u32(&mut reader)?;
 
             let mut content = String::new();
             reader.set_limit(content_size as u64);
-            reader.read_to_string(&mut content);
+            reader.read_to_string(&mut content).context(IO {})?;
 
-            Document { content }
-        }).collect();
+            docs.push(Document { content })
+        }
 
-        Index { postings, docs }
+        Ok(Index { postings, docs })
     }
 }
 
@@ -165,7 +182,7 @@ mod tests {
 
     #[test]
     fn add_to_index() {
-        let mut idx: Index = Default::default();
+        let mut idx = Index::default();
 
         idx.add(Document { content: "hello".to_string() });
         idx.add(Document { content: "world".to_string() });
@@ -176,7 +193,7 @@ mod tests {
 
     #[test]
     fn search_index() {
-        let mut idx: Index = Default::default();
+        let mut idx = Index::default();
         let dogs = Document { content: String::from("dogs and cats are super cool") };
         let cats_better = Document { content: String::from("but cats are better") };
 
@@ -188,26 +205,28 @@ mod tests {
     }
 
     #[test]
-    fn write_with_no_documents() {
+    fn write_with_no_documents() -> Result<(), io::Error> {
         let mut buf = io::Cursor::new(vec![0; 1]);
 
-        let mut idx: Index = Default::default();
-        idx.write(&mut buf);
+        let idx = Index::default();
+        idx.write(&mut buf)?;
 
         // No postings (4 bytes) no docs (4 bytes)
         assert_eq!(&[0; 8], &buf.get_ref()[..]);
+
+        Ok(())
     }
 
     #[test]
-    fn write_with_one_doc_and_one_term() {
+    fn write_with_one_doc_and_one_term() -> Result<(), io::Error> {
         let foo = Document { content: String::from("foo") };
         // We create an index with a postings list but no docs
         // for test purposes only. This shouldn't really exist in practice.
-        let mut index: Index = Default::default();
+        let mut index = Index::default();
         index.add(foo);
 
         let mut buf = io::Cursor::new(vec![]);
-        index.write(&mut buf);
+        index.write(&mut buf)?;
 
         assert_eq!(&[0, 0, 0, 1,        // One posting
                      3,                 // Three letters
@@ -219,10 +238,12 @@ mod tests {
                      b'f', b'o', b'o'   // The doc content
                     ],
                    &buf.get_ref()[..]);
+
+        Ok(())
     }
 
     #[test]
-    fn read_with_one_doc_and_term() {
+    fn read_with_one_doc_and_term() -> Result<(), IndexReadError> {
         let buf =
             // One term in the postings list: foo
             [0, 0, 0, 1,
@@ -235,12 +256,12 @@ mod tests {
                 0, 0, 0, 3,
             // And the doc content
                 b'f', b'o', b'o'];
-        let index = Index::read(io::Cursor::new(buf));
-
+        let index = Index::read(io::Cursor::new(&buf))?;
         let foo = Document { content: String::from("foo") };
-        let mut expected_index: Index = Default::default();
+        let mut expected_index = Index::default();
         expected_index.add(foo);
 
         assert_eq!(expected_index, index);
+        Ok(())
     }
 }
