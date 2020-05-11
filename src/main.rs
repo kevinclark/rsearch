@@ -40,7 +40,7 @@ fn main() -> std::result::Result<(), std::io::Error> {
         let output_file = matches.value_of("output_file").expect("output_file required");
         let output_file = fs::File::create(output_file).expect("Unable to open output file");
 
-        let mut index: Index = Default::default();
+        let mut index = Index::default();
 
         let start = Instant::now();
 
