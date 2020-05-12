@@ -1,6 +1,10 @@
-use std::fs;
-use std::path::Path;
-use std::time::Instant;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Instant,
+    thread,
+    sync::{Arc, Mutex, mpsc::channel}
+};
 
 use rsearch::{Document, Index};
 
@@ -44,14 +48,37 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
         let start = Instant::now();
 
+        let (sender, receiver) = channel();
+
         let walker = WalkDir::new(input_dir).into_iter();
-        for entry in walker.filter_entry(|e| !is_hidden(e)) {
-            let entry = entry.unwrap();
-            if !entry.file_type().is_dir() {
-                if let Ok(content) = mail_content(entry.path()) {
-                    index.add(Document { content });
+        let paths: Vec<PathBuf> = walker.filter_entry(|e| !is_hidden(e))
+                            .filter(|e| !e.as_ref().expect("Path entry in filter blew up").file_type().is_dir())
+                            .map(|e| PathBuf::from(e.expect("Path entry in map blew up").path()))
+                            .collect();
+        let paths = Arc::new(Mutex::new(paths));
+
+        let mut handles: Vec<thread::JoinHandle<_>> = Vec::new();
+        for _ in 0..20 {
+            let (paths, tx) = (Arc::clone(&paths), sender.clone());
+            handles.push(thread::spawn(move || {
+                //let mut paths = paths.lock().expect("Mutex blew up");
+
+                while let Some(path) = { let x = (*paths.lock().expect("Mutex blew up")).pop(); x } {
+                    if let Ok(content) = mail_content(&path.as_path()) {
+                        tx.send(content).expect("Send failed");
+                    }
                 }
-            }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("Join failed");
+        }
+
+        drop(sender);
+
+        while let Ok(content) = receiver.recv() {
+            index.add(Document { content });
         }
 
         println!("Done reading at {:?}", start.elapsed());
