@@ -63,8 +63,6 @@ fn main() -> std::result::Result<(), std::io::Error> {
         for _ in 0..20 {
             let (paths, tx) = (Arc::clone(&paths), sender.clone());
             handles.push(thread::spawn(move || {
-                //let mut paths = paths.lock().expect("Mutex blew up");
-
                 while let Some(path) = { let x = (*paths.lock().expect("Mutex blew up")).pop(); x } {
                     if let Ok(content) = mail_content(&path.as_path()) {
                         let analyzed = rsearch::analyze(content);
