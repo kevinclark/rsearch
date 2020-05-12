@@ -57,6 +57,8 @@ fn main() -> std::result::Result<(), std::io::Error> {
                             .collect();
         let paths = Arc::new(Mutex::new(paths));
 
+        println!("Paths collected at {:?}", start.elapsed());
+
         let mut handles: Vec<thread::JoinHandle<_>> = Vec::new();
         for _ in 0..20 {
             let (paths, tx) = (Arc::clone(&paths), sender.clone());
@@ -76,6 +78,8 @@ fn main() -> std::result::Result<(), std::io::Error> {
         }
 
         drop(sender);
+
+        println!("Done parsing at {:?}", start.elapsed());
 
         while let Ok(content) = receiver.recv() {
             index.add(Document { content });
