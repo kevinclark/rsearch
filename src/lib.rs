@@ -17,21 +17,17 @@ pub enum IndexReadError {
     UTF8Read { source: std::string::FromUtf8Error, backtrace: Backtrace}
 }
 
-fn read_u32<R>(reader: &mut io::Take<R>) -> Result<u32, IndexReadError>
-    where R: io::BufRead
+fn read_u32(reader: &mut impl io::BufRead) -> Result<u32, IndexReadError>
 {
     let mut buf = [0 as u8; 4];
-    reader.set_limit(4);
     reader.read_exact(&mut buf).context(IO {})?;
 
     Ok(u32::from_be_bytes(buf))
 }
 
-fn read_u8<R>(reader: &mut io::Take<R>) -> Result<u8, IndexReadError>
-    where R: io::BufRead
+fn read_u8(reader: &mut impl io::BufRead) -> Result<u8, IndexReadError>
 {
     let mut buf = [0 as u8];
-    reader.set_limit(1);
     reader.read_exact(&mut buf).context(IO {})?;
 
     Ok(buf[0])
@@ -143,8 +139,7 @@ impl Index
     pub fn read<R>(reader: R) -> Result<Self, IndexReadError>
         where R: io::Read
     {
-        let reader = io::BufReader::new(reader);
-        let mut reader = reader.take(4);
+        let mut reader = io::BufReader::new(reader);
 
         // First, postings size
         let num_terms = read_u32(&mut reader)?;
@@ -154,9 +149,10 @@ impl Index
             // Read the size of the term, then the term itself
             let term_size = read_u8(&mut reader)? as usize;
 
-            reader.set_limit(term_size as u64);
             let mut term = String::new();
-            reader.read_to_string(&mut term).context(IO {})?;
+            {
+                reader.by_ref().take(term_size as u64).read_to_string(&mut term).context(IO {})?;
+            }
 
             // Then the number of doc ids and the doc ids themselves
             let num_doc_ids = read_u32(&mut reader)?;
@@ -177,8 +173,9 @@ impl Index
             let content_size = read_u32(&mut reader)?;
 
             let mut content = String::new();
-            reader.set_limit(content_size as u64);
-            reader.read_to_string(&mut content).context(IO {})?;
+            {
+                reader.by_ref().take(content_size as u64).read_to_string(&mut content).context(IO {})?;
+            }
 
             docs.push(Document { content })
         }
