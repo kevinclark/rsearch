@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     io, io::prelude::*,
     vec::Vec
 };
@@ -36,21 +37,34 @@ fn read_u8<R>(reader: &mut io::Take<R>) -> Result<u8, IndexReadError>
     Ok(buf[0])
 }
 
-#[derive(PartialEq, Debug, Clone)]
-pub struct Document {
-    pub content: String
-}
-
-
 use std::collections::HashMap;
 type PostingsList = HashMap<String, Vec<usize>>;
+
+#[derive(PartialEq, Debug)]
+pub struct Document {
+    content: String
+}
+
+type TermList = HashSet<String>;
+
+pub struct AnalyzedDocument {
+    terms: TermList,
+    content: String
+}
+
+pub fn analyze(content: String) -> AnalyzedDocument {
+    AnalyzedDocument {
+        terms: content.to_lowercase().unicode_words().map(|w| w.to_string()).collect(),
+        content: content
+    }
+}
 
 
 #[derive(Default, PartialEq, Debug)]
 pub struct Index
 {
     // Append only
-    docs: Vec<Document>,
+    docs: Vec<Document>, // Doc ID comes from placement here
     // Terms in postings list are normalized (lowercased for now, more later)
     // TODO: Should probably templatize this later to allow variable numbers
     // but would mean that we need to increment our own counter rather
@@ -60,13 +74,13 @@ pub struct Index
 
 impl Index
 {
-    pub fn add(&mut self, doc: Document) {
+    pub fn add(&mut self, doc: AnalyzedDocument) {
         let doc_id = self.docs.len();
-        for term in doc.content.to_lowercase().unicode_words() {
+        for term in doc.terms {
             (self.postings.entry(term.to_string()).or_insert_with(Vec::new))
                 .push(doc_id);
         }
-        self.docs.push(doc);
+        self.docs.push(Document { content: doc.content.to_string() });
     }
 
     pub fn search<'a>(&'a self, query: &str) -> Vec<&'a Document> {
@@ -184,8 +198,8 @@ mod tests {
     fn add_to_index() {
         let mut idx = Index::default();
 
-        idx.add(Document { content: "hello".to_string() });
-        idx.add(Document { content: "world".to_string() });
+        idx.add(analyze("hello".to_string()));
+        idx.add(analyze("world".to_string()));
 
         assert_eq!(Some(&vec![0]), idx.postings.get("hello"));
         assert_eq!(Some(&vec![1]), idx.postings.get("world"));
@@ -194,14 +208,17 @@ mod tests {
     #[test]
     fn search_index() {
         let mut idx = Index::default();
-        let dogs = Document { content: String::from("dogs and cats are super cool") };
-        let cats_better = Document { content: String::from("but cats are better") };
+        let dogs = analyze("dogs and cats are super cool".to_string());
+        let cats_better = analyze("but cats are better".to_string());
 
-        idx.add(dogs.clone());
-        idx.add(cats_better.clone());
-        idx.add(Document { content: String::from("no") });
+        let expected = vec![dogs.content.clone(), cats_better.content.clone()];
 
-        assert_eq!(vec![&dogs, &cats_better], idx.search("cats"));
+        idx.add(dogs);
+        idx.add(cats_better);
+        idx.add(analyze("no".to_string()));
+
+        let results: Vec<String> = idx.search("cats").iter().map(|d| d.content.clone()).collect();
+        assert_eq!(expected, results);
     }
 
     #[test]
@@ -219,11 +236,10 @@ mod tests {
 
     #[test]
     fn write_with_one_doc_and_one_term() -> Result<(), io::Error> {
-        let foo = Document { content: String::from("foo") };
         // We create an index with a postings list but no docs
         // for test purposes only. This shouldn't really exist in practice.
         let mut index = Index::default();
-        index.add(foo);
+        index.add(analyze("foo".to_string()));
 
         let mut buf = io::Cursor::new(vec![]);
         index.write(&mut buf)?;
@@ -257,9 +273,8 @@ mod tests {
             // And the doc content
                 b'f', b'o', b'o'];
         let index = Index::read(io::Cursor::new(&buf))?;
-        let foo = Document { content: String::from("foo") };
         let mut expected_index = Index::default();
-        expected_index.add(foo);
+        expected_index.add(analyze("foo".to_string()));
 
         assert_eq!(expected_index, index);
         Ok(())

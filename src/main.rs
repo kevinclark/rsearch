@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex, mpsc::channel}
 };
 
-use rsearch::{Document, Index};
+use rsearch::Index;
 
 use clap::{crate_authors, crate_description, crate_name, crate_version, App, SubCommand, Arg};
 use mailparse;
@@ -67,7 +67,8 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
                 while let Some(path) = { let x = (*paths.lock().expect("Mutex blew up")).pop(); x } {
                     if let Ok(content) = mail_content(&path.as_path()) {
-                        tx.send(content).expect("Send failed");
+                        let analyzed = rsearch::analyze(content);
+                        tx.send(analyzed).expect("Send failed");
                     }
                 }
             }));
@@ -81,8 +82,8 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
         println!("Done parsing at {:?}", start.elapsed());
 
-        while let Ok(content) = receiver.recv() {
-            index.add(Document { content });
+        while let Ok(analyzed) = receiver.recv() {
+            index.add(analyzed);
         }
 
         println!("Done reading at {:?}", start.elapsed());
