@@ -10,25 +10,29 @@ use snafu::{Snafu, ResultExt, Backtrace};
 
 
 #[derive(Debug, Snafu)]
-pub enum IndexReadError {
-    #[snafu_display("{}", "source")]
-    IO { source: io::Error, backtrace: Backtrace },
-    #[snafu_display("{}", "source")]
-    UTF8Read { source: std::string::FromUtf8Error, backtrace: Backtrace}
+pub enum IndexError {
+    UnableToReadPostingListSize { source: io::Error, backtrace: Backtrace },
+    UnableToReadTermSize { term_id: u32, source: io::Error, backtrace: Backtrace },
+    UnableToReadTerm { term_id: u32, source: io::Error, backtrace: Backtrace},
+    UnableToReadNumberOfDocIds { term_id: u32, source: io::Error, backtrace: Backtrace },
+    UnableToReadDocId { term_id: u32, doc_index: u32, source: io::Error, backtrace: Backtrace },
+    UnableToReadNumberOfDocs { source: io::Error, backtrace: Backtrace },
+    UnableToReadDocSize { doc_id: u32, source: io::Error, backtrace: Backtrace },
+    UnableToReadDocContent { doc_id: u32, source: io::Error, backtrace: Backtrace },
 }
 
-fn read_u32(reader: &mut impl io::BufRead) -> Result<u32, IndexReadError>
+fn read_u32(reader: &mut impl io::BufRead) -> Result<u32, io::Error>
 {
     let mut buf = [0 as u8; 4];
-    reader.read_exact(&mut buf).context(IO {})?;
+    reader.read_exact(&mut buf)?;
 
     Ok(u32::from_be_bytes(buf))
 }
 
-fn read_u8(reader: &mut impl io::BufRead) -> Result<u8, IndexReadError>
+fn read_u8(reader: &mut impl io::BufRead) -> Result<u8, io::Error>
 {
     let mut buf = [0 as u8];
-    reader.read_exact(&mut buf).context(IO {})?;
+    reader.read_exact(&mut buf)?;
 
     Ok(buf[0])
 }
@@ -38,7 +42,7 @@ type PostingsList = HashMap<String, Vec<usize>>;
 
 #[derive(PartialEq, Debug)]
 pub struct Document {
-    content: String
+    pub content: String
 }
 
 type TermList = HashSet<String>;
@@ -50,7 +54,7 @@ pub struct AnalyzedDocument {
 
 pub fn analyze(content: String) -> AnalyzedDocument {
     AnalyzedDocument {
-        terms: content.to_lowercase().unicode_words().map(|w| w.to_string()).collect(),
+        terms: content.unicode_words().map(|w| w.to_lowercase().to_string()).collect(),
         content: content
     }
 }
@@ -136,45 +140,47 @@ impl Index
         Ok(())
     }
 
-    pub fn read<R>(reader: R) -> Result<Self, IndexReadError>
+    pub fn read<R>(reader: R) -> Result<Self, IndexError>
         where R: io::Read
     {
         let mut reader = io::BufReader::new(reader);
 
         // First, postings size
-        let num_terms = read_u32(&mut reader)?;
+        let num_terms = read_u32(&mut reader).context(UnableToReadPostingListSize)?;
+        let mut postings = PostingsList::with_capacity_and_hasher(num_terms as usize, Default::default());
 
-        let mut postings: PostingsList = PostingsList::with_capacity_and_hasher(num_terms as usize, Default::default());
-        for _ in 0..num_terms {
+        for term_id in 0..num_terms {
             // Read the size of the term, then the term itself
-            let term_size = read_u8(&mut reader)? as usize;
+            let term_size = read_u8(&mut reader).context(UnableToReadTermSize { term_id })?;
 
             let mut term = String::new();
             {
-                reader.by_ref().take(term_size as u64).read_to_string(&mut term).context(IO {})?;
+                let mut limited_reader = reader.by_ref().take(term_size as u64);
+                limited_reader.read_to_string(&mut term).context(UnableToReadTerm { term_id })?;
             }
 
             // Then the number of doc ids and the doc ids themselves
-            let num_doc_ids = read_u32(&mut reader)?;
+            let num_doc_ids = read_u32(&mut reader).context(UnableToReadNumberOfDocIds { term_id })?;
 
             let mut doc_ids: Vec<usize> = Vec::with_capacity(num_doc_ids as usize);
 
-            for _ in 0..num_doc_ids {
-                doc_ids.push(read_u32(&mut reader)? as usize);
+            for doc_index in 0..num_doc_ids {
+                doc_ids.push(read_u32(&mut reader).context(UnableToReadDocId { term_id, doc_index })? as usize);
             }
 
             postings.insert(term, doc_ids);
         }
 
-        let num_docs = read_u32(&mut reader)?;
+        let num_docs = read_u32(&mut reader).context(UnableToReadNumberOfDocs)?;
 
         let mut docs: Vec<Document> = Vec::with_capacity(num_docs as usize);
-        for _ in 0..num_docs {
-            let content_size = read_u32(&mut reader)?;
+        for doc_id in 0..num_docs {
+            let content_size = read_u32(&mut reader).context(UnableToReadDocSize { doc_id })?;
 
             let mut content = String::new();
             {
-                reader.by_ref().take(content_size as u64).read_to_string(&mut content).context(IO {})?;
+                let mut limited_reader = reader.by_ref().take(content_size as u64);
+                limited_reader.read_to_string(&mut content).context(UnableToReadDocContent { doc_id })?;
             }
 
             docs.push(Document { content })
@@ -256,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn read_with_one_doc_and_term() -> Result<(), IndexReadError> {
+    fn read_with_one_doc_and_term() -> Result<(), IndexError> {
         let buf =
             // One term in the postings list: foo
             [0, 0, 0, 1,
