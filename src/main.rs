@@ -37,9 +37,25 @@ fn main() -> std::result::Result<(), std::io::Error> {
                         .arg(Arg::with_name("output_file")
                              .help("The name of the index file")
                              .required(true)))
+        .subcommand(SubCommand::with_name("search")
+                        .arg(Arg::with_name("index_file")
+                             .help("The name of the index file")
+                             .required(true))
+                        .arg(Arg::with_name("query")
+                             .help("What to search for")
+                             .required(true)))
     .get_matches();
 
-    if let Some(matches) = matches.subcommand_matches("create") {
+    if let Some(matches) = matches.subcommand_matches("search") {
+        let query = matches.value_of("query").expect("query required");
+        let index_file = matches.value_of("index_file").expect("index_file required");
+        let index_file = fs::File::open(index_file).expect("Unable to open index file");
+        let index = Index::read(index_file).expect("Unable to read index");
+
+        for doc in index.search(&query) {
+            println!("{}", doc.content);
+        }
+    } else if let Some(matches) = matches.subcommand_matches("create") {
         let input_dir = matches.value_of("input_dir").expect("input_dir required");
         let output_file = matches.value_of("output_file").expect("output_file required");
         let output_file = fs::File::create(output_file).expect("Unable to open output file");
