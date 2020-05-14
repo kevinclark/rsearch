@@ -14,8 +14,8 @@ pub enum IndexError {
     UnableToReadPostingListSize { source: io::Error, backtrace: Backtrace },
     UnableToReadTermSize { term_id: u32, source: io::Error, backtrace: Backtrace },
     UnableToReadTerm { term_id: u32, source: io::Error, backtrace: Backtrace},
-    UnableToReadNumberOfDocIds { term_id: u32, source: io::Error, backtrace: Backtrace },
-    UnableToReadDocId { term_id: u32, doc_index: u32, source: io::Error, backtrace: Backtrace },
+    UnableToReadNumberOfDocIds { term: String, term_id: u32, source: io::Error, backtrace: Backtrace },
+    UnableToReadDocId { term: String, term_id: u32, doc_index: u32, source: io::Error, backtrace: Backtrace },
     UnableToReadNumberOfDocs { source: io::Error, backtrace: Backtrace },
     UnableToReadDocSize { doc_id: u32, source: io::Error, backtrace: Backtrace },
     UnableToReadDocContent { doc_id: u32, source: io::Error, backtrace: Backtrace },
@@ -160,12 +160,15 @@ impl Index
             }
 
             // Then the number of doc ids and the doc ids themselves
-            let num_doc_ids = read_u32(&mut reader).context(UnableToReadNumberOfDocIds { term_id })?;
+            let num_doc_ids = read_u32(&mut reader)
+                .with_context(|| UnableToReadNumberOfDocIds { term: term.clone(), term_id })?;
 
             let mut doc_ids: Vec<usize> = Vec::with_capacity(num_doc_ids as usize);
 
             for doc_index in 0..num_doc_ids {
-                doc_ids.push(read_u32(&mut reader).context(UnableToReadDocId { term_id, doc_index })? as usize);
+                let doc_id = read_u32(&mut reader)
+                    .with_context(|| UnableToReadDocId { term: term.clone(), term_id, doc_index })?;
+                doc_ids.push(doc_id as usize);
             }
 
             postings.insert(term, doc_ids);
