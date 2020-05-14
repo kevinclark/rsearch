@@ -160,14 +160,12 @@ impl Index
             }
 
             // Then the number of doc ids and the doc ids themselves
-            let num_doc_ids = read_u32(&mut reader)
-                .with_context(|| UnableToReadNumberOfDocIds { term: term.clone(), term_id })?;
+            let num_doc_ids = read_u32(&mut reader).context(UnableToReadNumberOfDocIds { term: &term, term_id })?;
 
             let mut doc_ids: Vec<usize> = Vec::with_capacity(num_doc_ids as usize);
 
             for doc_index in 0..num_doc_ids {
-                let doc_id = read_u32(&mut reader)
-                    .with_context(|| UnableToReadDocId { term: term.clone(), term_id, doc_index })?;
+                let doc_id = read_u32(&mut reader).context(UnableToReadDocId { term: &term, term_id, doc_index })?;
                 doc_ids.push(doc_id as usize);
             }
 
