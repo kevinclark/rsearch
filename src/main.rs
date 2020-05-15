@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex, mpsc::channel}
 };
 
-use rsearch::Index;
+use rsearch::{Index, IndexWriter};
 
 use clap::{crate_authors, crate_description, crate_name, crate_version, App, SubCommand, Arg};
 use mailparse;
@@ -60,7 +60,7 @@ fn main() -> std::result::Result<(), std::io::Error> {
         let output_file = matches.value_of("output_file").expect("output_file required");
         let output_file = fs::File::create(output_file).expect("Unable to open output file");
 
-        let mut index = Index::default();
+        let mut index = IndexWriter::default();
 
         let start = Instant::now();
 

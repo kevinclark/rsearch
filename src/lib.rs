@@ -20,29 +20,6 @@ pub enum IndexError {
     UnableToReadNumberOfDocs { source: io::Error },
     UnableToReadDocSize { doc_id: u32, source: io::Error },
     UnableToReadDocContent { doc_id: u32, source: io::Error },
-
-    UnableToDownCastPostingsLength { len: usize, source: core::num::TryFromIntError },
-    UnableToWritePostingsLength { source: io::Error},
-
-    UnableToDownCastTermLength { term: String, len: usize, source: core::num::TryFromIntError },
-    UnableToWriteTermLength { term: String, source: io::Error},
-    UnableToWriteTerm { term: String, source: io::Error},
-
-    UnableToDownCastNumberOfDocIds { num_docs: usize, source: core::num::TryFromIntError },
-    UnableToWriteNumberOfDocIds { num_docs: u32, source: io::Error},
-
-    UnableToDownCastDocId { doc_id: usize, source: core::num::TryFromIntError },
-    UnableToWriteDocId { doc_id: u32, source: io::Error},
-
-    UnableToDownCastNumberOfDocs { num_docs: usize, source: core::num::TryFromIntError },
-    UnableToWriteNumberOfDocs { num_docs: u32, source: io::Error},
-
-    UnableToDownCastDocLength { content_len: usize, source: core::num::TryFromIntError },
-    UnableToWriteDocLength { content_len: u32, source: io::Error},
-    // TODO: include path?
-    UnableToWriteDoc { source: io::Error },
-
-    UnableToFlush { source: io::Error },
 }
 
 fn read_u32(reader: &mut impl io::BufRead) -> Result<u32, io::Error>
@@ -82,7 +59,7 @@ pub fn analyze(content: String) -> AnalyzedDocument {
 }
 
 
-#[derive(Default, PartialEq, Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Index
 {
     // Append only
@@ -94,15 +71,55 @@ pub struct Index
     postings: PostingsList
 }
 
-impl Index
-{
-    pub fn add(&mut self, doc: AnalyzedDocument) {
-        let doc_id = self.docs.len();
-        for term in doc.terms {
-            (self.postings.entry(term.to_string()).or_insert_with(Vec::new))
-                .push(doc_id);
+impl Index {
+    pub fn read<R>(reader: R) -> Result<Self, IndexError>
+        where R: io::Read
+    {
+        let mut reader = io::BufReader::new(reader);
+
+        // First, postings size
+        let num_terms = read_u32(&mut reader).context(UnableToReadPostingListSize)?;
+        let mut postings = PostingsList::with_capacity_and_hasher(num_terms as usize, Default::default());
+
+        for term_id in 0..num_terms {
+            // Read the size of the term, then the term itself
+            let term_size = read_u8(&mut reader).context(UnableToReadTermSize { term_id })?;
+
+            let mut term = String::new();
+            {
+                let mut limited_reader = reader.by_ref().take(term_size as u64);
+                limited_reader.read_to_string(&mut term).context(UnableToReadTerm { term_id })?;
+            }
+
+            // Then the number of doc ids and the doc ids themselves
+            let num_doc_ids = read_u32(&mut reader).context(UnableToReadNumberOfDocIds { term: &term, term_id })?;
+
+            let mut doc_ids: Vec<usize> = Vec::with_capacity(num_doc_ids as usize);
+
+            for doc_index in 0..num_doc_ids {
+                let doc_id = read_u32(&mut reader).context(UnableToReadDocId { term: &term, term_id, doc_index })?;
+                doc_ids.push(doc_id as usize);
+            }
+
+            postings.insert(term, doc_ids);
         }
-        self.docs.push(Document { content: doc.content.to_string() });
+
+        let num_docs = read_u32(&mut reader).context(UnableToReadNumberOfDocs)?;
+
+        let mut docs: Vec<Document> = Vec::with_capacity(num_docs as usize);
+        for doc_id in 0..num_docs {
+            let content_size = read_u32(&mut reader).context(UnableToReadDocSize { doc_id })?;
+
+            let mut content = String::new();
+            {
+                let mut limited_reader = reader.by_ref().take(content_size as u64);
+                limited_reader.read_to_string(&mut content).context(UnableToReadDocContent { doc_id })?;
+            }
+
+            docs.push(Document { content })
+        }
+
+        Ok(Index { postings, docs })
     }
 
     pub fn search<'a>(&'a self, query: &str) -> Vec<&'a Document> {
@@ -118,7 +135,60 @@ impl Index
             .collect()
     }
 
-    pub fn write<W>(&self, writer: W) -> Result<(), IndexError>
+}
+
+
+#[derive(Debug, Snafu)]
+pub enum IndexWriterError {
+    UnableToDownCastPostingsLength { len: usize, source: core::num::TryFromIntError },
+    UnableToWritePostingsLength { source: io::Error},
+
+    UnableToDownCastTermLength { term: String, len: usize, source: core::num::TryFromIntError },
+    UnableToWriteTermLength { term: String, source: io::Error},
+    UnableToWriteTerm { term: String, source: io::Error},
+
+    UnableToDownCastNumberOfDocIds { num_docs: usize, source: core::num::TryFromIntError },
+    UnableToWriteNumberOfDocIds { num_docs: u32, source: io::Error},
+
+    UnableToDownCastDocId { doc_id: usize, source: core::num::TryFromIntError },
+    UnableToWriteDocId { doc_id: u32, source: io::Error},
+
+    UnableToDownCastNumberOfDocs { num_docs: usize, source: core::num::TryFromIntError },
+    UnableToWriteNumberOfDocs { num_docs: u32, source: io::Error},
+
+    UnableToDownCastDocLength { content_len: usize, source: core::num::TryFromIntError },
+    UnableToWriteDocLength { content_len: u32, source: io::Error},
+    // TODO: include path?
+    UnableToWriteDoc { source: io::Error },
+
+    UnableToFlush { source: io::Error },
+}
+
+
+#[derive(PartialEq, Debug, Default)]
+pub struct IndexWriter {
+    docs: Vec<Document>,
+    postings: PostingsList
+}
+
+impl From<IndexWriter> for Index {
+    fn from(writer: IndexWriter) -> Self {
+        Index { docs: writer.docs, postings: writer.postings }
+    }
+}
+
+
+impl IndexWriter {
+    pub fn add(&mut self, doc: AnalyzedDocument) {
+        let doc_id = self.docs.len();
+        for term in doc.terms {
+            (self.postings.entry(term.to_string()).or_insert_with(Vec::new))
+                .push(doc_id);
+        }
+        self.docs.push(Document { content: doc.content.to_string() });
+    }
+
+    pub fn write<W>(&self, writer: W) -> Result<(), IndexWriterError>
         where W : io::Write
     {
         let mut writer = io::BufWriter::new(writer);
@@ -177,55 +247,6 @@ impl Index
         Ok(())
     }
 
-    pub fn read<R>(reader: R) -> Result<Self, IndexError>
-        where R: io::Read
-    {
-        let mut reader = io::BufReader::new(reader);
-
-        // First, postings size
-        let num_terms = read_u32(&mut reader).context(UnableToReadPostingListSize)?;
-        let mut postings = PostingsList::with_capacity_and_hasher(num_terms as usize, Default::default());
-
-        for term_id in 0..num_terms {
-            // Read the size of the term, then the term itself
-            let term_size = read_u8(&mut reader).context(UnableToReadTermSize { term_id })?;
-
-            let mut term = String::new();
-            {
-                let mut limited_reader = reader.by_ref().take(term_size as u64);
-                limited_reader.read_to_string(&mut term).context(UnableToReadTerm { term_id })?;
-            }
-
-            // Then the number of doc ids and the doc ids themselves
-            let num_doc_ids = read_u32(&mut reader).context(UnableToReadNumberOfDocIds { term: &term, term_id })?;
-
-            let mut doc_ids: Vec<usize> = Vec::with_capacity(num_doc_ids as usize);
-
-            for doc_index in 0..num_doc_ids {
-                let doc_id = read_u32(&mut reader).context(UnableToReadDocId { term: &term, term_id, doc_index })?;
-                doc_ids.push(doc_id as usize);
-            }
-
-            postings.insert(term, doc_ids);
-        }
-
-        let num_docs = read_u32(&mut reader).context(UnableToReadNumberOfDocs)?;
-
-        let mut docs: Vec<Document> = Vec::with_capacity(num_docs as usize);
-        for doc_id in 0..num_docs {
-            let content_size = read_u32(&mut reader).context(UnableToReadDocSize { doc_id })?;
-
-            let mut content = String::new();
-            {
-                let mut limited_reader = reader.by_ref().take(content_size as u64);
-                limited_reader.read_to_string(&mut content).context(UnableToReadDocContent { doc_id })?;
-            }
-
-            docs.push(Document { content })
-        }
-
-        Ok(Index { postings, docs })
-    }
 }
 
 #[cfg(test)]
@@ -237,7 +258,7 @@ mod tests {
 
     #[test]
     fn add_to_index() {
-        let mut idx = Index::default();
+        let mut idx = IndexWriter::default();
 
         idx.add(analyze("hello".to_string()));
         idx.add(analyze("world".to_string()));
@@ -248,7 +269,7 @@ mod tests {
 
     #[test]
     fn search_index() {
-        let mut idx = Index::default();
+        let mut idx = IndexWriter::default();
         let dogs = analyze("dogs and cats are super cool".to_string());
         let cats_better = analyze("but cats are better".to_string());
 
@@ -258,15 +279,18 @@ mod tests {
         idx.add(cats_better);
         idx.add(analyze("no".to_string()));
 
-        let results: Vec<String> = idx.search("cats").iter().map(|d| d.content.clone()).collect();
+        let results: Vec<String> =
+            Index::from(idx).search("cats").iter()
+                .map(|d| d.content.clone())
+                .collect();
         assert_eq!(expected, results);
     }
 
     #[test]
-    fn write_with_no_documents() -> Result<(), IndexError> {
+    fn write_with_no_documents() -> Result<(), IndexWriterError> {
         let mut buf = io::Cursor::new(vec![0; 1]);
 
-        let idx = Index::default();
+        let idx = IndexWriter::default();
         idx.write(&mut buf)?;
 
         // No postings (4 bytes) no docs (4 bytes)
@@ -276,10 +300,10 @@ mod tests {
     }
 
     #[test]
-    fn write_with_one_doc_and_one_term() -> Result<(), IndexError> {
+    fn write_with_one_doc_and_one_term() -> Result<(), IndexWriterError> {
         // We create an index with a postings list but no docs
         // for test purposes only. This shouldn't really exist in practice.
-        let mut index = Index::default();
+        let mut index = IndexWriter::default();
         index.add(analyze("foo".to_string()));
 
         let mut buf = io::Cursor::new(vec![]);
@@ -314,8 +338,9 @@ mod tests {
             // And the doc content
                 b'f', b'o', b'o'];
         let index = Index::read(io::Cursor::new(&buf))?;
-        let mut expected_index = Index::default();
+        let mut expected_index = IndexWriter::default();
         expected_index.add(analyze("foo".to_string()));
+        let expected_index = Index::from(expected_index);
 
         assert_eq!(expected_index, index);
         Ok(())
