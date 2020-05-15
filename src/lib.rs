@@ -1,24 +1,48 @@
 use std::{
     collections::HashSet,
+    convert::TryFrom,
     io, io::prelude::*,
     vec::Vec
 };
 
 use itertools::Itertools;
 use unicode_segmentation::UnicodeSegmentation;
-use snafu::{Snafu, ResultExt, Backtrace};
+use snafu::{Snafu, ResultExt};
 
 
 #[derive(Debug, Snafu)]
 pub enum IndexError {
-    UnableToReadPostingListSize { source: io::Error, backtrace: Backtrace },
-    UnableToReadTermSize { term_id: u32, source: io::Error, backtrace: Backtrace },
-    UnableToReadTerm { term_id: u32, source: io::Error, backtrace: Backtrace},
-    UnableToReadNumberOfDocIds { term: String, term_id: u32, source: io::Error, backtrace: Backtrace },
-    UnableToReadDocId { term: String, term_id: u32, doc_index: u32, source: io::Error, backtrace: Backtrace },
-    UnableToReadNumberOfDocs { source: io::Error, backtrace: Backtrace },
-    UnableToReadDocSize { doc_id: u32, source: io::Error, backtrace: Backtrace },
-    UnableToReadDocContent { doc_id: u32, source: io::Error, backtrace: Backtrace },
+    UnableToReadPostingListSize { source: io::Error },
+    UnableToReadTermSize { term_id: u32, source: io::Error },
+    UnableToReadTerm { term_id: u32, source: io::Error },
+    UnableToReadNumberOfDocIds { term: String, term_id: u32, source: io::Error },
+    UnableToReadDocId { term: String, term_id: u32, doc_index: u32, source: io::Error },
+    UnableToReadNumberOfDocs { source: io::Error },
+    UnableToReadDocSize { doc_id: u32, source: io::Error },
+    UnableToReadDocContent { doc_id: u32, source: io::Error },
+
+    UnableToDownCastPostingsLength { len: usize, source: core::num::TryFromIntError },
+    UnableToWritePostingsLength { source: io::Error},
+
+    UnableToDownCastTermLength { term: String, len: usize, source: core::num::TryFromIntError },
+    UnableToWriteTermLength { term: String, source: io::Error},
+    UnableToWriteTerm { term: String, source: io::Error},
+
+    UnableToDownCastNumberOfDocIds { num_docs: usize, source: core::num::TryFromIntError },
+    UnableToWriteNumberOfDocIds { num_docs: u32, source: io::Error},
+
+    UnableToDownCastDocId { doc_id: usize, source: core::num::TryFromIntError },
+    UnableToWriteDocId { doc_id: u32, source: io::Error},
+
+    UnableToDownCastNumberOfDocs { num_docs: usize, source: core::num::TryFromIntError },
+    UnableToWriteNumberOfDocs { num_docs: u32, source: io::Error},
+
+    UnableToDownCastDocLength { content_len: usize, source: core::num::TryFromIntError },
+    UnableToWriteDocLength { content_len: u32, source: io::Error},
+    // TODO: include path?
+    UnableToWriteDoc { source: io::Error },
+
+    UnableToFlush { source: io::Error },
 }
 
 fn read_u32(reader: &mut impl io::BufRead) -> Result<u32, io::Error>
@@ -53,10 +77,8 @@ pub struct AnalyzedDocument {
 }
 
 pub fn analyze(content: String) -> AnalyzedDocument {
-    AnalyzedDocument {
-        terms: content.unicode_words().map(|w| w.to_lowercase().to_string()).collect(),
-        content: content
-    }
+    let terms = content.unicode_words().map(|w| w.to_lowercase().to_string()).collect();
+    AnalyzedDocument { terms, content }
 }
 
 
@@ -96,7 +118,7 @@ impl Index
             .collect()
     }
 
-    pub fn write<W>(&self, writer: W) -> Result<(), io::Error>
+    pub fn write<W>(&self, writer: W) -> Result<(), IndexError>
         where W : io::Write
     {
         let mut writer = io::BufWriter::new(writer);
@@ -111,31 +133,46 @@ impl Index
         // Format:
         //
         // POSTINGS_SIZE:u32 [TERM_SIZE:u8 TERM NUM_DOC_IDS: u32 [u32, u32]], ...
-        writer.write_all(&(self.postings.keys().len() as u32).to_be_bytes())?;
+        let postings_len = self.postings.keys().len();
+        let postings_len = u32::try_from(postings_len).context(UnableToDownCastPostingsLength { len: postings_len })?;
+        writer.write_all(&postings_len.to_be_bytes()).context(UnableToWritePostingsLength)?;
 
         for (term, doc_ids) in &self.postings {
             // Term length, then term
             let term_bytes = term.as_bytes();
-            writer.write_all(&(term_bytes.len() as u8).to_be_bytes())?;
-            writer.write_all(&term_bytes[..])?;
+            let term_length = term_bytes.len();
+            let term_length =
+                u8::try_from(term_length).context(UnableToDownCastTermLength { term: term, len: term_length })?;
+
+            writer.write_all(&term_length.to_be_bytes()).context(UnableToWriteTermLength { term: term })?;
+            writer.write_all(&term_bytes[..]).context(UnableToWriteTerm { term: term })?;
 
             // Number of docs, then the docs
-            writer.write_all(&(doc_ids.len() as u32).to_be_bytes())?;
+            let num_docs = doc_ids.len();
+            let num_docs = u32::try_from(num_docs).context(UnableToDownCastNumberOfDocIds { num_docs })?;
+            writer.write_all(&num_docs.to_be_bytes()).context(UnableToWriteNumberOfDocIds { num_docs })?;
+
             for doc_id in doc_ids {
-                writer.write_all(&(*doc_id as u32).to_be_bytes())?;
+                let doc_id = u32::try_from(*doc_id).context(UnableToDownCastDocId { doc_id: *doc_id })?;
+                writer.write_all(&doc_id.to_be_bytes()).context(UnableToWriteDocId { doc_id })?;
             }
         }
 
         // Write documents
         //
         // Number of documents, then doc length and content pairs
-        writer.write_all(&(self.docs.len() as u32).to_be_bytes())?;
+        let num_docs = self.docs.len();
+        let num_docs = u32::try_from(num_docs).context(UnableToDownCastNumberOfDocs { num_docs })?;
+        writer.write_all(&num_docs.to_be_bytes()).context(UnableToWriteNumberOfDocs { num_docs })?;
+
         for doc in &self.docs {
-            writer.write_all(&(doc.content.len() as u32).to_be_bytes())?;
-            writer.write_all(doc.content.as_bytes())?;
+            let content_len = doc.content.len();
+            let content_len = u32::try_from(content_len).context(UnableToDownCastDocLength { content_len })?;
+            writer.write_all(&content_len.to_be_bytes()).context(UnableToWriteDocLength { content_len })?;
+            writer.write_all(doc.content.as_bytes()).context(UnableToWriteDoc)?;
         }
 
-        writer.flush()?;
+        writer.flush().context(UnableToFlush)?;
 
         Ok(())
     }
@@ -226,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn write_with_no_documents() -> Result<(), io::Error> {
+    fn write_with_no_documents() -> Result<(), IndexError> {
         let mut buf = io::Cursor::new(vec![0; 1]);
 
         let idx = Index::default();
@@ -239,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn write_with_one_doc_and_one_term() -> Result<(), io::Error> {
+    fn write_with_one_doc_and_one_term() -> Result<(), IndexError> {
         // We create an index with a postings list but no docs
         // for test purposes only. This shouldn't really exist in practice.
         let mut index = Index::default();

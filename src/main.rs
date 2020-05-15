@@ -102,7 +102,7 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
         println!("Done reading at {:?}", start.elapsed());
 
-        index.write(output_file)?;
+        index.write(output_file).expect("Unable to write file");
 
         println!("Done writing at {:?}", start.elapsed());
     }
