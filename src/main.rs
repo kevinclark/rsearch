@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     fs,
     path::{Path, PathBuf},
     time::Instant,
@@ -64,26 +65,33 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
         let start = Instant::now();
 
-        let (sender, receiver) = channel();
-
         let walker = WalkDir::new(input_dir).into_iter();
         let paths: Vec<PathBuf> = walker.filter_entry(|e| !is_hidden(e))
                             .filter(|e| !e.as_ref().expect("Path entry in filter blew up").file_type().is_dir())
                             .map(|e| PathBuf::from(e.expect("Path entry in map blew up").path()))
                             .collect();
         let paths = Arc::new(Mutex::new(paths));
+        let content_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let analyzed_queue = Arc::new(Mutex::new(VecDeque::new()));
 
         println!("Paths collected at {:?}", start.elapsed());
 
         let mut handles: Vec<thread::JoinHandle<_>> = Vec::new();
         for _ in 0..20 {
-            let (paths, tx) = (Arc::clone(&paths), sender.clone());
+            let paths = Arc::clone(&paths);
+            let content_queue = Arc::clone(&content_queue);
+            let analyzed_queue = Arc::clone(&analyzed_queue);
             handles.push(thread::spawn(move || {
-                while let Some(path) = { let x = (*paths.lock().expect("Mutex blew up")).pop(); x } {
+
+                while let Some(path) = { let x = (*paths.lock().unwrap()).pop(); x } {
                     if let Ok(content) = mail_content(&path.as_path()) {
-                        let analyzed = rsearch::analyze(content);
-                        tx.send(analyzed).expect("Send failed");
+                        content_queue.lock().unwrap().push_back(content);
                     }
+                }
+
+                while let Some(content) = { let x = (*content_queue.lock().unwrap()).pop_front(); x } {
+                    let analyzed = rsearch::analyze(content);
+                    analyzed_queue.lock().unwrap().push_back(analyzed);
                 }
             }));
         }
@@ -92,11 +100,11 @@ fn main() -> std::result::Result<(), std::io::Error> {
             handle.join().expect("Join failed");
         }
 
-        drop(sender);
-
         println!("Done parsing at {:?}", start.elapsed());
 
-        while let Ok(analyzed) = receiver.recv() {
+        let analyzed_queue = Arc::try_unwrap(analyzed_queue).ok().unwrap().into_inner().unwrap();
+
+        for analyzed in analyzed_queue {
             index.add(analyzed);
         }
 
