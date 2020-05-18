@@ -38,6 +38,14 @@ fn read_u8(reader: &mut impl io::BufRead) -> Result<u8, io::Error>
     Ok(buf[0])
 }
 
+fn read_u16(reader: &mut impl io::BufRead) -> Result<u16, io::Error>
+{
+    let mut buf = [0 as u8; 2];
+    reader.read_exact(&mut buf)?;
+
+    Ok(u16::from_be_bytes(buf))
+}
+
 use std::collections::HashMap;
 type PostingsList = HashMap<String, Vec<usize>>;
 
@@ -83,7 +91,7 @@ impl Index {
 
         for term_id in 0..num_terms {
             // Read the size of the term, then the term itself
-            let term_size = read_u8(&mut reader).context(UnableToReadTermSize { term_id })?;
+            let term_size = read_u16(&mut reader).context(UnableToReadTermSize { term_id })?;
 
             let mut term = String::new();
             {
@@ -212,7 +220,7 @@ impl IndexWriter {
             let term_bytes = term.as_bytes();
             let term_length = term_bytes.len();
             let term_length =
-                u8::try_from(term_length).context(UnableToDownCastTermLength { term: term, len: term_length })?;
+                u16::try_from(term_length).context(UnableToDownCastTermLength { term: term, len: term_length })?;
 
             writer.write_all(&term_length.to_be_bytes()).context(UnableToWriteTermLength { term: term })?;
             writer.write_all(&term_bytes[..]).context(UnableToWriteTerm { term: term })?;
